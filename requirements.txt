@@ -1,7 +1,8 @@
+streamlit
 pdfplumber
+pytesseract
+pdf2image
+pillow
 numpy
 matplotlib
-streamlit
-pytesseract
-Pillow
-pdf2image
+pandas
