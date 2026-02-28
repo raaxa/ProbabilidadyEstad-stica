@@ -8,70 +8,84 @@ from PIL import Image
 from pdf2image import convert_from_bytes
 import io
 
-st.set_page_config(page_title="Analizador CFE OCR", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Analizador CFE Pro", page_icon="⚡", layout="wide")
 st.title("⚡ Analizador de Recibos CFE")
+st.markdown("Sube las imágenes o PDFs de tus recibos para calcular estadística.")
 
-def buscar_total_en_texto(texto):
-    # Patrón 1: Busca el número grande después de "TOTAL A PAGAR"
-    # Patrón 2: Busca el número que sigue al signo $ en grande
-    patrones = [
-        r"TOTAL A PAGAR\s*\$?\s*(\d+)", 
-        r"\$\s*(\d{2,5})",
-        r"Total a pagar\s*\$?\s*(\d+)"
-    ]
-    for patron in patrones:
-        match = re.search(patron, texto, re.IGNORECASE)
-        if match:
-            return float(match.group(1))
+def buscar_monto_cfe(texto):
+    """Busca el monto total usando varios métodos de detección."""
+    # Eliminar saltos de línea para búsqueda lineal
+    texto_plano = " ".join(texto.split())
+    
+    # 1. Intentar buscar después de la frase clave
+    match_frase = re.search(r"TOTAL A PAGAR[:\s]*\$?\s*(\d+)", texto_plano, re.IGNORECASE)
+    if match_frase:
+        return float(match_frase.group(1))
+    
+    # 2. Intentar buscar cualquier signo de $ seguido de números (formato grande del recibo)
+    match_dinero = re.findall(r"\$\s*(\d{2,5})", texto_plano)
+    if match_dinero:
+        # En los recibos de CFE, el total suele ser el número más repetido o el más grande cerca del inicio
+        return float(match_dinero[0])
+        
     return None
 
-def extraer_monto(file):
+def extraer_datos(file):
     file_bytes = file.read()
     monto = None
+    metodo = ""
     
-    # Intentar como PDF digital primero
-    if file.type == "application/pdf":
-        try:
+    try:
+        # Paso 1: Intentar lectura digital (PDF original)
+        if file.type == "application/pdf":
             with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
                 texto = "".join([p.extract_text() or "" for p in pdf.pages])
-                monto = buscar_total_en_texto(texto)
-        except: pass
+                monto = buscar_monto_cfe(texto)
+                if monto: metodo = "Digital"
 
-    # Si no funcionó o es imagen, usar OCR
-    if monto is None:
-        try:
+        # Paso 2: Si falla, usar OCR (Imagen o PDF escaneado)
+        if not monto:
             if file.type == "application/pdf":
                 images = convert_from_bytes(file_bytes)
-                texto_ocr = "".join([pytesseract.image_to_string(img) for img in images])
+                texto_ocr = " ".join([pytesseract.image_to_string(img, lang='spa') for img in images])
             else:
                 img = Image.open(io.BytesIO(file_bytes))
-                texto_ocr = pytesseract.image_to_string(img)
-            monto = buscar_total_en_texto(texto_ocr)
-        except Exception as e:
-            st.error(f"Error técnico: {e}")
+                texto_ocr = pytesseract.image_to_string(img, lang='spa')
             
-    return monto
-
-# Interfaz
-archivos = st.file_uploader("Sube tus recibos", type=["pdf", "jpg", "png"], accept_multiple_files=True)
-
-if st.button("Analizar") and archivos:
-    pagos = []
-    for f in archivos:
-        monto = extraer_monto(f)
-        if monto:
-            pagos.append(monto)
-            st.success(f"✅ {f.name}: ${monto}")
-        else:
-            st.warning(f"❌ {f.name}: No se detectó el monto.")
-
-    if pagos:
-        st.divider()
-        c1, c2 = st.columns(2)
-        c1.metric("Media", f"${np.mean(pagos):.2f}")
-        c2.metric("Varianza", f"{np.var(pagos):.2f}")
+            monto = buscar_monto_cfe(texto_ocr)
+            if monto: metodo = "OCR (Escaneo)"
+            
+    except Exception as e:
+        st.error(f"Error procesando {file.name}: {e}")
         
-        fig, ax = plt.subplots()
-        ax.bar(range(len(pagos)), pagos, color='green')
-        ax.set_ylabel("Pesos $")
-        st.pyplot(fig)
+    return monto, metodo
+
+# --- INTERFAZ ---
+archivos = st.file_uploader("Carga tus recibos (Imagen o PDF)", type=["pdf", "jpg", "png", "jpeg"], accept_multiple_files=True)
+
+if archivos:
+    if st.button("🚀 Analizar Recibos"):
+        pagos = []
+        for f in archivos:
+            monto, metodo = extraer_datos(f)
+            if monto:
+                pagos.append(monto)
+                st.success(f"✅ **{f.name}**: ${monto:,.2f} (Detectado vía {metodo})")
+            else:
+                st.warning(f"⚠️ **{f.name}**: No se pudo extraer el monto automáticamente.")
+
+        if len(pagos) > 0:
+            st.divider()
+            # RESULTADOS QUE PEDISTE
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Media (Promedio)", f"${np.mean(pagos):,.2f}")
+            with col2:
+                st.metric("Varianza", f"{np.var(pagos):.2f}")
+            
+            # Gráfica de Barras
+            st.write("### Histórico de Pagos")
+            fig, ax = plt.subplots()
+            ax.bar([f"Recibo {i+1}" for i in range(len(pagos))], pagos, color='#00a859')
+            ax.set_ylabel("Monto ($)")
+            st.pyplot(fig)
