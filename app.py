@@ -3,112 +3,108 @@ import pdfplumber
 import re
 import numpy as np
 import matplotlib.pyplot as plt
+import pandas as pd
 import pytesseract
 from PIL import Image
 from pdf2image import convert_from_bytes
 import io
 
-# 1. CONFIGURACIÓN VISUAL
-st.set_page_config(page_title="Calculadora CFE: Probabilidad", page_icon="📊")
-st.title("📊 Analizador de Recibos CFE")
-st.markdown("Extrae datos de tus recibos, calcula la **media**, la **varianza** y genera una **gráfica**.")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="CFE Stat Analyzer", page_icon="📈")
+st.title("⚡ Analizador Estadístico de Recibos CFE")
+st.markdown("Este sistema extrae el **historial de pagos** para calcular estadísticas reales.")
 
-# 2. FUNCIÓN PARA EXTRAER EL MONTO (Lógica de Búsqueda)
-def extraer_monto_total(texto):
-    # Buscamos patrones comunes en recibos de CFE: "TOTAL A PAGAR" o "$" seguido de números
-    patrones = [
-        r"TOTAL A PAGAR\s*\$?\s*([\d,]+\.?\d*)",
-        r"\$\s*([\d,]+\.\d{2})",
-        r"Total a pagar\s*\$?\s*([\d,]+)"
-    ]
-    for patron in patrones:
-        match = re.search(patron, texto, re.IGNORECASE)
-        if match:
-            # Limpiamos el número (quitamos comas) y lo convertimos a decimal
-            valor_str = match.group(1).replace(',', '')
-            return float(valor_str)
+def limpiar_monto(texto):
+    """Limpia strings de dinero como '$395.00' a float 395.0"""
+    if not texto: return None
+    numeros = re.findall(r"[\d,.]+", texto)
+    if numeros:
+        return float(numeros[0].replace(',', ''))
     return None
 
-# 3. PROCESAMIENTO DE ARCHIVOS (PDF o IMAGEN)
-def procesar_recibo(archivo):
-    bytes_data = archivo.read()
-    texto_extraido = ""
-
-    # Si es PDF, intentamos leer texto digital primero
-    if archivo.type == "application/pdf":
-        try:
-            with pdfplumber.open(io.BytesIO(bytes_data)) as pdf:
-                texto_extraido = " ".join([pag.extract_text() or "" for pag in pdf.pages])
-        except:
-            pass
+def extraer_datos(file):
+    """Extrae montos del historial o el total principal"""
+    bytes_data = file.read()
+    lista_pagos = []
     
-    # Si no hay texto (es una foto) o es imagen (JPG/PNG), usamos OCR
-    if len(texto_extraido.strip()) < 5:
-        try:
-            if archivo.type == "application/pdf":
-                imagenes = convert_from_bytes(bytes_data)
-                texto_extraido = " ".join([pytesseract.image_to_string(img) for img in imagenes])
-            else:
-                img = Image.open(io.BytesIO(bytes_data))
-                texto_extraido = pytesseract.image_to_string(img)
-        except Exception as e:
-            st.error(f"Error procesando {archivo.name}: {e}")
+    if file.type == "application/pdf":
+        with pdfplumber.open(io.BytesIO(bytes_data)) as pdf:
+            # 1. Intentar buscar la tabla de historial en la página 2
+            for page in pdf.pages:
+                tables = page.extract_tables()
+                for table in tables:
+                    for row in table:
+                        # Buscamos filas que parezcan dinero (ej. $395.00)
+                        for cell in row:
+                            if cell and "$" in cell:
+                                monto = limpiar_monto(cell)
+                                if monto and monto > 10: # Evitar cargos mínimos
+                                    lista_pagos.append(monto)
             
-    return extraer_monto_total(texto_extraido)
+            # 2. Si no encontró tabla, buscar el TOTAL A PAGAR en el texto
+            if not lista_pagos:
+                texto = " ".join([p.extract_text() or "" for p in pdf.pages])
+                match = re.search(r"TOTAL A PAGAR.*?\$?\s*([\d,.]+)", texto, re.I)
+                if match:
+                    lista_pagos.append(limpiar_monto(match.group(1)))
+    else:
+        # Procesamiento para IMÁGENES (OCR)
+        img = Image.open(io.BytesIO(bytes_data))
+        texto_ocr = pytesseract.image_to_string(img)
+        match = re.search(r"TOTAL A PAGAR.*?\$?\s*([\d,.]+)", texto_ocr, re.I)
+        if match:
+            lista_pagos.append(limpiar_monto(match.group(1)))
 
-# 4. INTERFAZ DE USUARIO
-archivos_subidos = st.file_uploader(
-    "Sube uno o varios recibos de CFE (PDF, JPG, PNG)", 
-    type=["pdf", "jpg", "png", "jpeg"], 
-    accept_multiple_files=True
-)
+    return lista_pagos
 
-if st.button("CALCULAR ESTADÍSTICAS"):
-    if archivos_subidos:
-        montos = []
-        nombres_archivos = []
+# --- INTERFAZ ---
+archivos = st.file_uploader("Sube tus recibos CFE", type=["pdf", "png", "jpg"], accept_multiple_files=True)
 
-        for archivo in archivos_subidos:
-            monto = procesar_recibo(archivo)
-            if monto is not None:
-                montos.append(monto)
-                nombres_archivos.append(archivo.name)
-                st.write(f"✅ **{archivo.name}**: ${monto:.2f}")
-            else:
-                st.warning(f"⚠️ No se detectó el monto en: {archivo.name}")
-
-        if len(montos) > 0:
+if st.button("GENERAR ANÁLISIS ESTADÍSTICO"):
+    if archivos:
+        todos_los_pagos = []
+        for f in archivos:
+            pagos_archivo = extraer_datos(f)
+            todos_los_pagos.extend(pagos_archivo)
+        
+        if todos_los_pagos:
+            # Eliminar duplicados si los hay y ordenar
+            datos = np.array(todos_los_pagos)
+            
             st.divider()
             
-            # --- CÁLCULOS ESTADÍSTICOS ---
-            media = np.mean(montos)
-            varianza = np.var(montos)
+            # --- CÁLCULOS ---
+            media = np.mean(datos)
+            varianza = np.var(datos)
             
-            # Mostrar resultados destacados
-            col1, col2 = st.columns(2)
-            col1.metric("MEDIA (Promedio)", f"${media:.2f}")
-            col2.metric("VARIANZA", f"{varianza:.2f}")
+            # --- MOSTRAR MÉTRICAS ---
+            c1, c2, c3 = st.columns(3)
+            c1.metric("MEDIA (Promedio)", f"${media:.2f}")
+            c2.metric("VARIANZA", f"{varianza:.2f}")
+            c3.metric("MUESTRAS", f"{len(datos)}")
             
-            # --- GENERACIÓN DE GRÁFICA ---
-            st.subheader("Gráfica de Pagos")
-            fig, ax = plt.subplots(figsize=(8, 4))
+            # --- GRÁFICA ---
+            st.subheader("Gráfica de Barras de Consumos")
+            fig, ax = plt.subplots(figsize=(10, 5))
+            colores = plt.cm.viridis(np.linspace(0, 1, len(datos)))
             
-            # Crear barras
-            x_labels = [n[:10] for n in nombres_archivos] # Acortamos nombres para que quepan
-            ax.bar(x_labels, montos, color='skyblue', edgecolor='navy')
+            ax.bar(range(len(datos)), datos, color=colores, edgecolor='black')
+            ax.axhline(media, color='red', linestyle='--', label=f'Media: ${media:.2f}')
             
-            # Etiquetas y estilo
             ax.set_ylabel("Monto en Pesos ($)")
-            ax.set_xlabel("Recibos")
-            ax.set_title("Comparativa de Pagos CFE")
+            ax.set_xlabel("Periodos detectados")
+            ax.legend()
             
-            # Mostrar valores sobre las barras
-            for i, v in enumerate(montos):
-                ax.text(i, v + (max(montos)*0.02), f"${v:.0f}", ha='center', fontweight='bold')
-
+            # Etiquetas en las barras
+            for i, v in enumerate(datos):
+                ax.text(i, v + 5, f"${int(v)}", ha='center', fontsize=9)
+                
             st.pyplot(fig)
             
+            # Mostrar tabla de datos para verificar
+            with st.expander("Ver lista de montos detectados"):
+                st.write(datos)
         else:
-            st.error("No se pudo extraer ningún monto. Intenta con una imagen más clara.")
+            st.error("No se detectaron montos. Asegúrate de que el recibo sea legible.")
     else:
-        st.info("Primero sube al menos un archivo.")
+        st.warning("Por favor, sube un archivo primero.")
