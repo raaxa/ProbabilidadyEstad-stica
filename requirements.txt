@@ -2,3 +2,6 @@ pdfplumber
 numpy
 matplotlib
 streamlit
+pytesseract
+Pillow
+pdf2image
