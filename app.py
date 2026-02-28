@@ -5,107 +5,92 @@ import numpy as np
 import matplotlib.pyplot as plt
 import io
 
-# --- CONFIGURACIÓN DE LA APP ---
-st.set_page_config(page_title="Analizador CFE Estadístico", page_icon="⚡")
-st.title("⚡ Analizador de Historial CFE")
-st.markdown("Extrae datos del **Consumo Histórico** para calcular estadísticas reales de tus pagos.")
+# Configuración de la página
+st.set_page_config(page_title="CFE Analizador Estadístico", page_icon="📊")
+st.title("📊 Analizador de Probabilidad: Recibos CFE")
+st.markdown("Extracción automática del **Historial de Importes** para Media y Varianza.")
 
 def limpiar_monto(texto):
-    """Limpia el texto y devuelve un float si parece un monto de pago real."""
+    """Extrae el número de strings como '$395.00' y evita números de servicio."""
     if not texto: return None
-    # Quitamos $, espacios y comas
-    limpio = texto.replace('$', '').replace(',', '').strip()
-    try:
-        valor = float(limpio)
-        # Filtro: Los pagos de CFE suelen estar entre $100 y $15,000. 
-        # Esto ignora números de servicio o RMU que son de 10+ dígitos.
-        if 50 < valor < 20000: 
+    # Solo buscamos números que tengan el formato de moneda (ej. 395.00)
+    match = re.search(r"(\d{1,4}\.\d{2})", texto.replace(',', ''))
+    if match:
+        valor = float(match.group(1))
+        # Filtro: Ignorar números gigantes (RMU/Servicio) y montos irrelevantes
+        if 50 < valor < 10000:
             return valor
-    except:
-        return None
     return None
 
-def extraer_datos_cfe(file):
-    """Busca montos de dinero en las tablas de historial del recibo."""
-    pagos_detectados = []
+def extraer_historial(file):
+    """Escanea el PDF buscando la tabla de Consumo Histórico."""
+    datos_pagos = []
     try:
         with pdfplumber.open(io.BytesIO(file.read())) as pdf:
+            # El historial casi siempre está en la página 2
             for page in pdf.pages:
-                # 1. Intentar extraer tablas (Método estándar)
                 tablas = page.extract_tables()
                 for tabla in tablas:
                     for fila in tabla:
                         for celda in fila:
-                            if celda and ('$' in celda or '.' in celda):
-                                monto = limpiar_monto(celda)
-                                if monto: pagos_detectados.append(monto)
-                
-                # 2. Si no encontró mucho, buscar por texto plano (Fuerza bruta)
-                if len(pagos_detectados) < 3:
-                    texto = page.extract_text() or ""
-                    # Busca patrones de dinero como $1,234.00 o 567.00
-                    encontrados = re.findall(r'\$?\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})', texto)
-                    for item in encontrados:
-                        monto = limpiar_monto(item)
-                        if monto: pagos_detectados.append(monto)
+                            if celda and '$' in celda:
+                                valor = limpiar_monto(celda)
+                                if valor:
+                                    datos_pagos.append(valor)
     except Exception as e:
         st.error(f"Error al leer el archivo: {e}")
     
-    # Eliminamos duplicados manteniendo el orden y limitamos a los últimos 12-24 meses
-    return list(dict.fromkeys(pagos_detectados))
+    # Eliminamos duplicados y nos quedamos con los últimos registros (máximo 12)
+    return list(dict.fromkeys(datos_pagos))[:12]
 
-# --- INTERFAZ DE USUARIO ---
-archivo_subido = st.file_uploader("Sube tu recibo CFE en PDF", type=["pdf"])
+# --- Interfaz de Usuario ---
+archivo = st.file_uploader("Sube tu recibo CFE (PDF)", type=["pdf"])
 
-if archivo_subido:
-    with st.spinner('Escaneando historial de pagos...'):
-        # Extraemos los datos del historial 
-        datos = extraer_datos_cfe(archivo_subido)
-    
-    if len(datos) > 1:
-        st.success(f"¡Éxito! Se detectaron {len(datos)} periodos de pago en el historial.")
+if archivo:
+    with st.spinner('Procesando datos históricos...'):
+        pagos = extraer_historial(archivo)
+
+    if len(pagos) > 1:
+        # Los datos en el PDF vienen del más reciente al más antiguo, los invertimos para la gráfica
+        pagos_ordenados = pagos[::-1]
         
         # --- CÁLCULOS ESTADÍSTICOS ---
-        # Media: $\mu = \frac{1}{n} \sum_{i=1}^{n} x_i$
-        media = np.mean(datos)
-        # Varianza: $\sigma^2 = \frac{\sum (x_i - \mu)^2}{n}$
-        varianza = np.var(datos)
-        
-        # Mostrar Métricas en pantalla
-        col1, col2, col3 = st.columns(3)
-        col1.metric("MEDIA (Promedio)", f"${media:.2f}")
-        col2.metric("VARIANZA", f"{varianza:.2f}")
-        col3.metric("MÁXIMO", f"${max(datos):.2f}")
+        media = np.mean(pagos_ordenados)
+        varianza = np.var(pagos_ordenados)
+        desviacion = np.std(pagos_ordenados)
+
+        st.success(f"Se detectaron {len(pagos_ordenados)} periodos de pago.")
+
+        # Mostrar métricas
+        c1, c2, c3 = st.columns(3)
+        c1.metric("MEDIA (Promedio)", f"${media:.2f}")
+        c2.metric("VARIANZA", f"{varianza:.2f}")
+        c3.metric("DESV. ESTÁNDAR", f"${desviacion:.2f}")
 
         # --- GRÁFICA DE BARRAS ---
-        st.subheader("Gráfica de Pagos Históricos")
+        st.subheader("Gráfica de Consumo Histórico")
         fig, ax = plt.subplots(figsize=(10, 5))
         
-        # Invertimos los datos para que el más reciente aparezca a la derecha
-        datos_grafica = datos[::-1]
-        indices = range(len(datos_grafica))
+        x_eje = [f"Bimestre {i+1}" for i in range(len(pagos_ordenados))]
+        barras = ax.bar(x_eje, pagos_ordenados, color='#2ecc71', edgecolor='black')
         
-        barras = ax.bar(indices, datos_grafica, color='skyblue', edgecolor='navy')
+        # Línea de la Media
         ax.axhline(media, color='red', linestyle='--', label=f'Media: ${media:.2f}')
         
-        ax.set_ylabel("Monto Pagado ($)")
-        ax.set_xlabel("Periodos Anteriores (Historial)")
-        ax.set_title("Evolución de Pagos CFE")
+        ax.set_ylabel("Monto en Pesos ($)")
+        ax.set_title("Historial de Importes Detectados")
         ax.legend()
 
-        # Añadir etiquetas de valor sobre cada barra
+        # Etiquetas de valor sobre las barras
         for bar in barras:
             yval = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2, yval + 5, f'${int(yval)}', 
-                    ha='center', va='bottom', fontsize=9, fontweight='bold')
+                    ha='center', va='bottom', fontweight='bold')
 
         st.pyplot(fig)
         
-        # Tabla detallada para verificar
-        with st.expander("Ver lista de montos detectados"):
-            st.write(datos)
-
-    elif len(datos) == 1:
-        st.warning(f"Solo se detectó un pago (${datos[0]}). Necesitas al menos 2 para calcular la varianza.")
+        # Mostrar tabla para comprobación
+        with st.expander("Ver lista de valores extraídos"):
+            st.write(pagos_ordenados)
     else:
-        st.error("No se encontraron datos en el historial. Asegúrate de que el PDF contenga la tabla de 'Consumo Histórico'.")
+        st.error("No se detectaron suficientes datos históricos. Verifica que el PDF tenga la tabla en la página 2.")
