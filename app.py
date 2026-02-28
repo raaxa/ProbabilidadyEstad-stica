@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 import io
 
 st.set_page_config(page_title="Analizador CFE Estadístico", page_icon="⚡")
-st.title("⚡ Analizador de Historial CFE")
-st.markdown("Extrae datos del **Consumo Histórico** para calcular estadísticas reales de tus pagos.")
+st.title("⚡ Analizador de Historial CFE (Múltiples Recibos)")
+st.markdown("Sube **varios recibos** en PDF para consolidar los datos de todos ellos y obtener estadísticas globales.")
 
 def limpiar_monto(texto):
     """Convierte una cadena con posible formato de dinero a float."""
@@ -25,7 +25,7 @@ def limpiar_monto(texto):
 
 def extraer_datos_cfe(file):
     """
-    Busca los montos de la columna 'Importe' en el historial de consumos.
+    Busca los montos de la columna 'Importe' en el historial de consumos de un único PDF.
     """
     pagos = []
     try:
@@ -80,6 +80,7 @@ def extraer_datos_cfe(file):
                         break
     except Exception as e:
         st.error(f"Error al leer el archivo: {e}")
+        return []
 
     # Eliminar duplicados manteniendo el orden
     pagos_unicos = []
@@ -89,45 +90,76 @@ def extraer_datos_cfe(file):
     return pagos_unicos
 
 # --- INTERFAZ DE USUARIO ---
-archivo_subido = st.file_uploader("Sube tu recibo CFE en PDF", type=["pdf"])
+archivos_subidos = st.file_uploader(
+    "Sube tus recibos CFE en PDF (puedes seleccionar varios)",
+    type=["pdf"],
+    accept_multiple_files=True
+)
 
-if archivo_subido:
-    with st.spinner('Escaneando historial de pagos...'):
-        datos = extraer_datos_cfe(archivo_subido)
+if archivos_subidos:
+    st.info(f"Se recibieron {len(archivos_subidos)} archivo(s). Procesando...")
+    
+    todos_los_pagos = []          # Lista global con todos los pagos de todos los recibos
+    resumen_por_archivo = []       # Para mostrar detalles
 
-    if len(datos) > 1:
-        st.success(f"¡Éxito! Se detectaron {len(datos)} periodos de pago.")
+    with st.spinner('Escaneando historial de pagos en todos los recibos...'):
+        for archivo in archivos_subidos:
+            # Leer el archivo (es necesario resetear el puntero porque ya se leyó al obtener el nombre)
+            archivo.seek(0)
+            pagos_recibo = extraer_datos_cfe(archivo)
+            if pagos_recibo:
+                todos_los_pagos.extend(pagos_recibo)
+                resumen_por_archivo.append({
+                    "nombre": archivo.name,
+                    "pagos": pagos_recibo,
+                    "cantidad": len(pagos_recibo)
+                })
+            else:
+                resumen_por_archivo.append({
+                    "nombre": archivo.name,
+                    "pagos": [],
+                    "cantidad": 0
+                })
 
-        media = np.mean(datos)
-        varianza = np.var(datos, ddof=1)   # Varianza muestral
+    if todos_los_pagos:
+        st.success(f"✅ Procesamiento completado. Se detectaron **{len(todos_los_pagos)}** periodos de pago en total.")
+
+        # --- CÁLCULOS ESTADÍSTICOS GLOBALES ---
+        media = np.mean(todos_los_pagos)
+        varianza = np.var(todos_los_pagos, ddof=1)   # Varianza muestral
+        maximo = max(todos_los_pagos)
 
         col1, col2, col3 = st.columns(3)
-        col1.metric("MEDIA (Promedio)", f"${media:.2f}")
-        col2.metric("VARIANZA (muestral)", f"{varianza:.2f}")
-        col3.metric("MÁXIMO", f"${max(datos):.2f}")
+        col1.metric("MEDIA GLOBAL (Promedio)", f"${media:.2f}")
+        col2.metric("VARIANZA GLOBAL (muestral)", f"{varianza:.2f}")
+        col3.metric("MÁXIMO GLOBAL", f"${maximo:.2f}")
 
-        # Gráfica de barras
-        st.subheader("Gráfica de Pagos Históricos")
-        fig, ax = plt.subplots(figsize=(10, 5))
-        # Invertir para que el más reciente quede a la derecha
-        datos_grafica = datos[::-1]
-        indices = range(len(datos_grafica))
-        barras = ax.bar(indices, datos_grafica, color='skyblue', edgecolor='navy')
-        ax.axhline(media, color='red', linestyle='--', label=f'Media: ${media:.2f}')
+        # --- GRÁFICA DE BARRAS GLOBAL ---
+        st.subheader("Gráfica Global de Pagos Históricos (todos los recibos)")
+        fig, ax = plt.subplots(figsize=(12, 6))
+        # Mostramos los pagos en el orden que fueron agregados (podríamos ordenarlos si se desea)
+        indices = range(len(todos_los_pagos))
+        barras = ax.bar(indices, todos_los_pagos, color='skyblue', edgecolor='navy')
+        ax.axhline(media, color='red', linestyle='--', label=f'Media Global: ${media:.2f}')
         ax.set_ylabel("Monto Pagado ($)")
-        ax.set_xlabel("Periodos Anteriores")
-        ax.set_title("Evolución de Pagos CFE")
+        ax.set_xlabel("Periodos (orden de extracción)")
+        ax.set_title("Evolución de Pagos CFE - Consolidado")
         ax.legend()
-        for bar in barras:
-            yval = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2, yval + 5, f'${int(yval)}',
-                    ha='center', va='bottom', fontsize=9, fontweight='bold')
+        # Añadir etiquetas solo si no hay demasiados datos
+        if len(todos_los_pagos) <= 30:
+            for bar in barras:
+                yval = bar.get_height()
+                ax.text(bar.get_x() + bar.get_width()/2, yval + 5, f'${int(yval)}',
+                        ha='center', va='bottom', fontsize=8, fontweight='bold')
         st.pyplot(fig)
 
-        with st.expander("Ver lista de montos detectados"):
-            st.write(datos)
-
-    elif len(datos) == 1:
-        st.warning(f"Solo se detectó un pago (${datos[0]}). Se necesitan al menos 2 para calcular la varianza.")
+        # --- DETALLE POR ARCHIVO ---
+        with st.expander("Ver detalles por cada recibo"):
+            for item in resumen_por_archivo:
+                st.markdown(f"**{item['nombre']}** - {item['cantidad']} pagos detectados")
+                if item['pagos']:
+                    st.write(item['pagos'])
+                else:
+                    st.warning("No se encontraron datos en este recibo.")
     else:
-        st.error("No se encontraron datos en el historial. Asegúrate de que el PDF contenga la tabla de 'Consumo Histórico'.")
+        st.error("No se encontraron datos en ningún recibo. Asegúrate de que los PDF contengan la tabla de 'Consumo Histórico'.")
