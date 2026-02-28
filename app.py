@@ -5,108 +5,88 @@ import numpy as np
 import matplotlib.pyplot as plt
 import io
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="CFE Stat Analyzer", page_icon="📈")
+# Configuración de la interfaz
+st.set_page_config(page_title="Analizador CFE Pro", page_icon="⚡")
 st.title("⚡ Analizador Estadístico CFE")
-st.markdown("Calcula la **Media**, **Varianza** y visualiza tu historial de consumo.")
+st.markdown("Extrae el historial de la segunda página para calcular Media y Varianza reales.")
 
-def limpiar_monto(texto):
-    """Limpia strings de dinero y los convierte a float de forma segura"""
-    if not texto:
+def limpiar_valor(texto):
+    if not texto: return None
+    # Quitamos signos de pesos, comas y espacios
+    limpio = texto.replace('$', '').replace(',', '').strip()
+    try:
+        valor = float(limpio)
+        # FILTRO DE SEGURIDAD: Un recibo residencial rara vez pasa de $20,000
+        # Esto evita leer el RMU o el No. de Servicio (que son millones)
+        if 10 < valor < 20000:
+            return valor
+    except:
         return None
-    # Eliminar signo de pesos y espacios
-    texto = texto.replace('$', '').replace(' ', '')
-    # Buscar solo la parte numérica (incluyendo puntos y comas de miles/decimales)
-    match = re.search(r"(\d[\d,.]*)", texto)
-    if match:
-        numero_str = match.group(1)
-        try:
-            # Si hay una coma seguida de dos dígitos al final, es decimal (estilo europeo/algunos recibos)
-            if len(numero_str) > 3 and numero_str[-3] == ',':
-                numero_str = numero_str[:-3].replace('.', '').replace(',', '') + '.' + numero_str[-2:]
-            else:
-                # Caso estándar: quitar comas de miles
-                numero_str = numero_str.replace(',', '')
-            return float(numero_str)
-        except ValueError:
-            return None
     return None
 
-def extraer_datos(file):
-    """Extrae montos del historial para tener una muestra estadística real"""
-    bytes_data = file.read()
-    lista_pagos = []
+def extraer_historial_cfe(file):
+    datos_validos = []
+    with pdfplumber.open(io.BytesIO(file.read())) as pdf:
+        # Buscamos principalmente en la página 2 (donde está la tabla histórica)
+        for page in pdf.pages:
+            tablas = page.extract_tables()
+            for tabla in tablas:
+                for fila in tabla:
+                    # En la tabla de CFE, el importe suele estar en la columna 2 o 3
+                    for celda in fila:
+                        if celda and '$' in celda:
+                            valor = limpiar_valor(celda)
+                            if valor:
+                                datos_validos.append(valor)
     
-    if file.type == "application/pdf":
-        with pdfplumber.open(io.BytesIO(bytes_data)) as pdf:
-            for page in pdf.pages:
-                tables = page.extract_tables()
-                for table in tables:
-                    for row in table:
-                        for cell in row:
-                            # Filtramos celdas que contienen el historial de pagos 
-                            if cell and "$" in cell:
-                                monto = limpiar_monto(cell)
-                                if monto and monto > 50: # Filtro para evitar cargos pequeños que no son el total
-                                    lista_pagos.append(monto)
-            
-            # Si la tabla falló, buscamos el Total a Pagar principal [cite: 18, 19]
-            if not lista_pagos:
-                texto = " ".join([p.extract_text() or "" for p in pdf.pages])
-                match = re.search(r"TOTAL A PAGAR.*?\$?\s*([\d,.]+)", texto, re.I)
-                if match:
-                    m = limpiar_monto(match.group(1))
-                    if m: lista_pagos.append(m)
-    return lista_pagos
+    # Si subes un PDF de CFE, la tabla trae los últimos 12-24 meses
+    # Eliminamos duplicados manteniendo el orden
+    return list(dict.fromkeys(datos_validos))
 
-# --- INTERFAZ ---
-archivos = st.file_uploader("Sube tus recibos CFE (PDF)", type=["pdf"], accept_multiple_files=True)
+# --- INTERFAZ DE USUARIO ---
+archivo = st.file_uploader("Sube tu recibo CFE (PDF)", type=["pdf"])
 
-if st.button("CALCULAR ESTADÍSTICAS"):
-    if archivos:
-        todos_los_pagos = []
-        for f in archivos:
-            pagos_archivo = extraer_datos(f)
-            todos_los_pagos.extend(pagos_archivo)
+if archivo:
+    with st.spinner('Analizando historial...'):
+        pagos = extraer_historial_cfe(archivo)
+    
+    if pagos:
+        st.success(f"Se detectaron {len(pagos)} periodos en el historial.")
         
-        if todos_los_pagos:
-            # Convertimos a array de numpy para cálculos estadísticos
-            datos = np.array(todos_los_pagos)
-            
-            # --- CÁLCULOS ---
-            media = np.mean(datos)
-            varianza = np.var(datos)
-            
-            st.divider()
-            
-            # --- MOSTRAR MÉTRICAS ---
-            c1, c2, c3 = st.columns(3)
-            c1.metric("MEDIA (Promedio)", f"${media:.2f}")
-            c2.metric("VARIANZA", f"{varianza:.2f}")
-            c3.metric("MUESTRAS DETECTADAS", len(datos))
-            
-            # --- GRÁFICA ---
-            st.subheader("Gráfica de Barras: Historial de Pagos")
-            fig, ax = plt.subplots(figsize=(10, 5))
-            
-            # Creamos la gráfica
-            x_axis = range(1, len(datos) + 1)
-            ax.bar(x_axis, datos, color='#2ecc71', edgecolor='#27ae60')
-            
-            # Línea de la media
-            ax.axhline(media, color='red', linestyle='--', label=f'Media: ${media:.2f}')
-            
-            ax.set_ylabel("Monto ($)")
-            ax.set_xlabel("Periodos Facturados")
-            ax.set_xticks(x_axis)
-            ax.legend()
-            
-            # Anotaciones sobre las barras
-            for i, v in enumerate(datos):
-                ax.text(i+1, v + 5, f"${int(v)}", ha='center', fontweight='bold')
-                
-            st.pyplot(fig)
-        else:
-            st.error("No se pudo extraer información. Verifica que el PDF sea un recibo de CFE válido.")
+        # --- CÁLCULOS ESTADÍSTICOS ---
+        media = np.mean(pagos)
+        varianza = np.var(pagos)
+        
+        # Mostrar Métricas
+        col1, col2 = st.columns(2)
+        col1.metric("MEDIA (Promedio)", f"${media:.2f}")
+        col2.metric("VARIANZA", f"{varianza:.2f}")
+        
+        # --- GRÁFICA DE BARRAS ---
+        st.subheader("Visualización de Consumos")
+        fig, ax = plt.subplots(figsize=(10, 5))
+        
+        # Invertimos para que el más reciente salga al final
+        pagos_grafica = pagos[::-1]
+        x_labels = [f"Periodo {i+1}" for i in range(len(pagos_grafica))]
+        
+        barras = ax.bar(x_labels, pagos_grafica, color='#2ecc71', edgecolor='black')
+        ax.axhline(media, color='red', linestyle='--', label=f'Media: ${media:.2f}')
+        
+        ax.set_ylabel("Importe en Pesos ($)")
+        ax.set_title("Historial de Pagos Extraído")
+        ax.legend()
+        
+        # Etiquetas de valor sobre las barras
+        for bar in barras:
+            yval = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2, yval + 5, f'${yval:.0f}', 
+                    ha='center', va='bottom', fontsize=9, fontweight='bold')
+        
+        st.pyplot(fig)
+        
+        # Tabla de datos para auditoría
+        with st.expander("Ver desglose de montos detectados"):
+            st.write(pagos)
     else:
-        st.info("Por favor, sube al menos un recibo.")
+        st.error("No se pudo extraer el historial. Asegúrate de que el PDF sea original de CFE.")
