@@ -16,7 +16,8 @@ def limpiar_monto(texto):
     limpio = re.sub(r'[^\d.]', '', str(texto))
     try:
         valor = float(limpio)
-        if 50 < valor < 20000:
+        # Rango típico de pagos CFE (ajustable)
+        if 50 < valor < 5000:
             return valor
     except:
         pass
@@ -29,38 +30,36 @@ def extraer_datos_cfe(file):
     pagos = []
     try:
         with pdfplumber.open(io.BytesIO(file.read())) as pdf:
-            # ----- Estrategia 1: extraer tablas con configuración mejorada -----
+            # ----- Estrategia 1: extracción por tabla con encabezados -----
             for page in pdf.pages:
-                # Configuración para detectar tablas basadas en texto (útil cuando no hay bordes)
-                table_settings = {
-                    "vertical_strategy": "text",
-                    "horizontal_strategy": "text",
-                }
-                tablas = page.extract_tables(table_settings)
+                tablas = page.extract_tables()
                 for tabla in tablas:
-                    if not tabla or len(tabla) < 2:
+                    if not tabla:
                         continue
-                    # Convertir a matriz de strings
-                    n_filas = len(tabla)
-                    n_cols = max(len(fila) for fila in tabla) if tabla else 0
-                    # Buscar columnas que contengan montos
-                    for col in range(n_cols):
-                        valores_col = []
-                        for fila in tabla:
-                            if col < len(fila):
-                                m = limpiar_monto(fila[col])
-                                if m:
-                                    valores_col.append(m)
-                        # Si la columna tiene al menos 3 valores en rango, la consideramos válida
-                        if len(valores_col) >= 3:
-                            pagos.extend(valores_col)
-                            break  # Tomamos la primera columna que cumpla
+                    # Buscar fila que contenga "Periodo" e "Importe"
+                    for i, fila in enumerate(tabla):
+                        fila_str = ' '.join([str(cell) for cell in fila if cell])
+                        if 'periodo' in fila_str.lower() and 'importe' in fila_str.lower():
+                            # Encontrar índice de la columna "Importe"
+                            idx_importe = None
+                            for j, cell in enumerate(fila):
+                                if cell and 'importe' in str(cell).lower():
+                                    idx_importe = j
+                                    break
+                            if idx_importe is not None:
+                                # Extraer de las filas siguientes
+                                for fila_datos in tabla[i+1:]:
+                                    if idx_importe < len(fila_datos):
+                                        monto = limpiar_monto(fila_datos[idx_importe])
+                                        if monto:
+                                            pagos.append(monto)
+                                break  # Salir del bucle de filas
                     if pagos:
-                        break
+                        break  # Salir del bucle de tablas
                 if pagos:
-                    break
+                    break  # Salir del bucle de páginas
 
-            # ----- Estrategia 2: si no se encontraron, buscar por texto (líneas "del ...") -----
+            # ----- Estrategia 2: si no se encontró por tabla, buscar líneas "del ... al ..." -----
             if len(pagos) < 3:
                 for page in pdf.pages:
                     texto = page.extract_text() or ""
@@ -69,13 +68,12 @@ def extraer_datos_cfe(file):
                         if linea.strip().startswith("del") and "al" in linea:
                             # Extraer todos los números de la línea
                             numeros = re.findall(r'\d+\.?\d*', linea)
-                            # Convertir a float y filtrar
-                            for num in numeros:
+                            if len(numeros) >= 4:  # Debe contener fechas y al menos un monto
+                                # El último número suele ser el importe
                                 try:
-                                    v = float(num)
-                                    if 50 < v < 20000:
-                                        pagos.append(v)
-                                        break  # Tomamos el primer número válido (suele ser el importe)
+                                    posible = float(numeros[-1])
+                                    if 50 < posible < 5000:
+                                        pagos.append(posible)
                                 except:
                                     pass
                     if pagos:
@@ -83,7 +81,7 @@ def extraer_datos_cfe(file):
     except Exception as e:
         st.error(f"Error al leer el archivo: {e}")
 
-    # Eliminar duplicados manteniendo orden
+    # Eliminar duplicados manteniendo el orden
     pagos_unicos = []
     for p in pagos:
         if p not in pagos_unicos:
@@ -111,7 +109,8 @@ if archivo_subido:
         # Gráfica de barras
         st.subheader("Gráfica de Pagos Históricos")
         fig, ax = plt.subplots(figsize=(10, 5))
-        datos_grafica = datos[::-1]   # Más reciente a la derecha
+        # Invertir para que el más reciente quede a la derecha
+        datos_grafica = datos[::-1]
         indices = range(len(datos_grafica))
         barras = ax.bar(indices, datos_grafica, color='skyblue', edgecolor='navy')
         ax.axhline(media, color='red', linestyle='--', label=f'Media: ${media:.2f}')
