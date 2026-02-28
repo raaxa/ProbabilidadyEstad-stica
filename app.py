@@ -10,14 +10,14 @@ st.title("⚡ Analizador de Historial CFE")
 st.markdown("Extrae datos del **Consumo Histórico** para calcular estadísticas reales de tus pagos.")
 
 def limpiar_monto(texto):
-    """Convierte una cadena con formato de dinero a float, si es un monto válido."""
+    """Convierte una cadena con posible formato de dinero a float."""
     if not texto:
         return None
-    # Eliminar caracteres no numéricos (excepto punto decimal)
-    limpio = re.sub(r'[^\d.]', '', texto.replace(',', ''))
+    # Eliminar todo excepto dígitos y punto decimal
+    limpio = re.sub(r'[^\d.]', '', str(texto))
     try:
         valor = float(limpio)
-        # Rango típico de recibos CFE (ajustable)
+        # Rango típico de pagos CFE
         if 50 < valor < 20000:
             return valor
     except:
@@ -26,64 +26,66 @@ def limpiar_monto(texto):
 
 def extraer_datos_cfe(file):
     """
-    Busca los montos de la columna 'Importe' en la tabla de historial de consumos.
+    Busca los montos de la columna 'Importe' en el historial de consumos.
     """
     pagos = []
     try:
         with pdfplumber.open(io.BytesIO(file.read())) as pdf:
-            for page in pdf.pages:
-                # ----- Estrategia 1: extraer tablas y buscar la columna 'Importe' -----
-                tablas = page.extract_tables()
-                for tabla in tablas:
-                    # Intentar identificar el índice de la columna "Importe"
-                    encabezados = tabla[0] if tabla else []
-                    idx_importe = None
-                    for i, celda in enumerate(encabezados):
-                        if celda and "importe" in celda.lower():
-                            idx_importe = i
-                            break
-                    if idx_importe is not None:
-                        # Extraer valores de esa columna (saltando encabezado)
-                        for fila in tabla[1:]:
-                            if len(fila) > idx_importe:
-                                monto = limpiar_monto(fila[idx_importe])
-                                if monto:
-                                    pagos.append(monto)
-                        # Si encontramos la columna, no seguimos con otras estrategias en esta página
-                        if pagos:
-                            break
-                    else:
-                        # Si no hay encabezado claro, recorrer toda la tabla buscando celdas con $
-                        for fila in tabla:
-                            for celda in fila:
-                                if celda and ('$' in celda or re.search(r'\d+\.\d{2}', celda)):
-                                    monto = limpiar_monto(celda)
-                                    if monto:
-                                        pagos.append(monto)
-
-                # ----- Estrategia 2: si no se encontraron suficientes pagos, buscar por texto -----
-                if len(pagos) < 3:
-                    texto = page.extract_text() or ""
-                    # Buscar líneas que contengan "Importe" y capturar el número que le sigue
+            for page_num, page in enumerate(pdf.pages):
+                texto = page.extract_text() or ""
+                
+                # Buscar si esta página contiene la tabla de historial
+                if "periodo" in texto.lower() and "importe" in texto.lower():
+                    # Dividir el texto en líneas
                     lineas = texto.split('\n')
                     for linea in lineas:
-                        if "importe" in linea.lower():
-                            # Buscar un patrón de dinero en esa línea
-                            numeros = re.findall(r'\$?\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})', linea)
+                        linea = linea.strip()
+                        # Las líneas de historial suelen comenzar con "del" (ej: "del 14 OCT 25 al 12 DIC 25")
+                        if linea.startswith("del") and "al" in linea:
+                            # Extraer todos los números de la línea
+                            numeros = re.findall(r'\d+\.?\d*', linea)
+                            # Convertir a float los que sean números válidos
+                            valores = []
                             for num in numeros:
-                                monto = limpiar_monto(num)
-                                if monto:
-                                    pagos.append(monto)
-                    # Si aún no hay datos, buscar cualquier número con formato de dinero en toda la página
-                    if len(pagos) < 3:
-                        candidatos = re.findall(r'\$?\s*\d{1,3}(?:,\d{3})*(?:\.\d{2})', texto)
-                        for cand in candidatos:
-                            monto = limpiar_monto(cand)
-                            if monto:
-                                pagos.append(monto)
+                                try:
+                                    v = float(num)
+                                    valores.append(v)
+                                except:
+                                    pass
+                            # En la línea típica, el último número es el importe
+                            if valores:
+                                posible_importe = valores[-1]
+                                # Verificar que esté en el rango
+                                if 50 < posible_importe < 20000:
+                                    pagos.append(posible_importe)
+                    
+                    # Si ya encontramos pagos en esta página, no seguimos buscando en otras
+                    if pagos:
+                        break
+                
+                # Si no se encontró la tabla por texto, intentar con extracción de tablas
+                if not pagos:
+                    tablas = page.extract_tables()
+                    for tabla in tablas:
+                        # Buscar encabezados que contengan "importe"
+                        if tabla and len(tabla) > 0:
+                            encabezados = tabla[0]
+                            idx_importe = None
+                            for i, celda in enumerate(encabezados):
+                                if celda and "importe" in celda.lower():
+                                    idx_importe = i
+                                    break
+                            if idx_importe is not None:
+                                for fila in tabla[1:]:
+                                    if len(fila) > idx_importe:
+                                        monto = limpiar_monto(fila[idx_importe])
+                                        if monto:
+                                            pagos.append(monto)
+                                if pagos:
+                                    break
     except Exception as e:
         st.error(f"Error al leer el archivo: {e}")
-
+    
     # Eliminar duplicados manteniendo el orden
     pagos_unicos = []
     for p in pagos:
@@ -113,7 +115,7 @@ if archivo_subido:
         # Gráfica de barras
         st.subheader("Gráfica de Pagos Históricos")
         fig, ax = plt.subplots(figsize=(10, 5))
-        # Ordenar de más antiguo a más reciente (el PDF suele mostrar el más reciente al inicio)
+        # Invertir para que el más reciente quede a la derecha (opcional)
         datos_grafica = datos[::-1]
         indices = range(len(datos_grafica))
         barras = ax.bar(indices, datos_grafica, color='skyblue', edgecolor='navy')
