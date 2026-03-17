@@ -5,10 +5,80 @@ import numpy as np
 import matplotlib.pyplot as plt
 import io
 
-st.set_page_config(page_title="Analizador CFE Estadístico", page_icon="⚡")
-st.title("⚡ Analizador de Historial CFE (Múltiples Recibos)")
-st.markdown("Sube **varios recibos** en PDF para consolidar los datos de todos ellos y obtener estadísticas globales.")
+# --- CONFIGURACIÓN DE LA APP ---
+st.set_page_config(page_title="Analizador CFE Estadístico", page_icon="⚡", layout="centered")
 
+# ============================================
+#  INICIO DE MEJORAS ESTÉTICAS
+# ============================================
+
+# 1. Imagen de logo (si tienes un archivo local, descomenta la línea y ajusta el nombre)
+# Si no tienes imagen, puedes poner un emoji grande o simplemente omitir esta línea.
+# Si quieres usar una imagen desde internet, usa la URL.
+try:
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/CFE_logo.svg/1200px-CFE_logo.svg.png", width=150)
+except:
+    pass  # Si no carga la imagen, no interrumpe la app
+
+# 2. CSS personalizado para cambiar fondo, colores y estilos generales
+st.markdown(
+    """
+    <style>
+    /* Fondo de la app: un azul muy claro */
+    .stApp {
+        background-color: #e8f0fe;
+    }
+    /* Títulos principales en azul oscuro */
+    h1 {
+        color: #003366;
+        text-align: center;
+        font-family: 'Arial', sans-serif;
+    }
+    h2, h3 {
+        color: #003366;
+    }
+    /* Mejorar aspecto de los botones */
+    .stButton > button {
+        border-radius: 8px;
+        background-color: #4CAF50;
+        color: white;
+        font-weight: bold;
+        border: none;
+        padding: 0.5rem 1rem;
+    }
+    .stButton > button:hover {
+        background-color: #45a049;
+    }
+    /* Personalizar las tarjetas de métricas */
+    .css-1xarl3l {
+        background-color: white;
+        border-radius: 10px;
+        padding: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    /* Hacer que el texto de los expansores sea más legible */
+    .streamlit-expanderHeader {
+        background-color: #f0f0f0;
+        border-radius: 5px;
+    }
+    /* Mensajes de éxito/advertencia con bordes redondeados */
+    .stAlert {
+        border-radius: 10px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+# 3. Título decorado (reemplaza el st.title original)
+st.markdown("<h1>⚡ Analizador de Historial CFE ⚡</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; font-size: 1.2rem; color: #2c3e50;'>Sube varios recibos y obtén estadísticas globales de tus pagos</p>", unsafe_allow_html=True)
+
+# ============================================
+#  FIN DE MEJORAS ESTÉTICAS
+# ============================================
+
+# Las funciones limpiar_monto y extraer_datos_cfe se mantienen igual
 def limpiar_monto(texto):
     """Convierte una cadena con posible formato de dinero a float."""
     if not texto:
@@ -16,7 +86,6 @@ def limpiar_monto(texto):
     limpio = re.sub(r'[^\d.]', '', str(texto))
     try:
         valor = float(limpio)
-        # Rango típico de pagos CFE (ajustable)
         if 50 < valor < 5000:
             return valor
     except:
@@ -24,52 +93,43 @@ def limpiar_monto(texto):
     return None
 
 def extraer_datos_cfe(file):
-    """
-    Busca los montos de la columna 'Importe' en el historial de consumos de un único PDF.
-    """
+    """Busca los montos de la columna 'Importe' en el historial de consumos de un único PDF."""
     pagos = []
     try:
         with pdfplumber.open(io.BytesIO(file.read())) as pdf:
-            # ----- Estrategia 1: extracción por tabla con encabezados -----
             for page in pdf.pages:
                 tablas = page.extract_tables()
                 for tabla in tablas:
                     if not tabla:
                         continue
-                    # Buscar fila que contenga "Periodo" e "Importe"
                     for i, fila in enumerate(tabla):
                         fila_str = ' '.join([str(cell) for cell in fila if cell])
                         if 'periodo' in fila_str.lower() and 'importe' in fila_str.lower():
-                            # Encontrar índice de la columna "Importe"
                             idx_importe = None
                             for j, cell in enumerate(fila):
                                 if cell and 'importe' in str(cell).lower():
                                     idx_importe = j
                                     break
                             if idx_importe is not None:
-                                # Extraer de las filas siguientes
                                 for fila_datos in tabla[i+1:]:
                                     if idx_importe < len(fila_datos):
                                         monto = limpiar_monto(fila_datos[idx_importe])
                                         if monto:
                                             pagos.append(monto)
-                                break  # Salir del bucle de filas
+                                break
                     if pagos:
-                        break  # Salir del bucle de tablas
+                        break
                 if pagos:
-                    break  # Salir del bucle de páginas
+                    break
 
-            # ----- Estrategia 2: si no se encontró por tabla, buscar líneas "del ... al ..." -----
             if len(pagos) < 3:
                 for page in pdf.pages:
                     texto = page.extract_text() or ""
                     lineas = texto.split('\n')
                     for linea in lineas:
                         if linea.strip().startswith("del") and "al" in linea:
-                            # Extraer todos los números de la línea
                             numeros = re.findall(r'\d+\.?\d*', linea)
-                            if len(numeros) >= 4:  # Debe contener fechas y al menos un monto
-                                # El último número suele ser el importe
+                            if len(numeros) >= 4:
                                 try:
                                     posible = float(numeros[-1])
                                     if 50 < posible < 5000:
@@ -82,7 +142,6 @@ def extraer_datos_cfe(file):
         st.error(f"Error al leer el archivo: {e}")
         return []
 
-    # Eliminar duplicados manteniendo el orden
     pagos_unicos = []
     for p in pagos:
         if p not in pagos_unicos:
@@ -91,20 +150,19 @@ def extraer_datos_cfe(file):
 
 # --- INTERFAZ DE USUARIO ---
 archivos_subidos = st.file_uploader(
-    "Sube tus recibos CFE en PDF (puedes seleccionar varios)",
+    "📂 Selecciona tus recibos CFE en PDF (puedes elegir varios)",
     type=["pdf"],
     accept_multiple_files=True
 )
 
 if archivos_subidos:
-    st.info(f"Se recibieron {len(archivos_subidos)} archivo(s). Procesando...")
+    st.info(f"📄 Se recibieron {len(archivos_subidos)} archivo(s). Procesando...")
     
-    todos_los_pagos = []          # Lista global con todos los pagos de todos los recibos
-    resumen_por_archivo = []       # Para mostrar detalles
+    todos_los_pagos = []
+    resumen_por_archivo = []
 
-    with st.spinner('Escaneando historial de pagos en todos los recibos...'):
+    with st.spinner('⏳ Escaneando historial de pagos en todos los recibos...'):
         for archivo in archivos_subidos:
-            # Leer el archivo (es necesario resetear el puntero porque ya se leyó al obtener el nombre)
             archivo.seek(0)
             pagos_recibo = extraer_datos_cfe(archivo)
             if pagos_recibo:
@@ -124,28 +182,24 @@ if archivos_subidos:
     if todos_los_pagos:
         st.success(f"✅ Procesamiento completado. Se detectaron **{len(todos_los_pagos)}** periodos de pago en total.")
 
-        # --- CÁLCULOS ESTADÍSTICOS GLOBALES ---
         media = np.mean(todos_los_pagos)
-        varianza = np.var(todos_los_pagos, ddof=1)   # Varianza muestral
+        varianza = np.var(todos_los_pagos, ddof=1)
         maximo = max(todos_los_pagos)
 
         col1, col2, col3 = st.columns(3)
-        col1.metric("MEDIA GLOBAL (Promedio)", f"${media:.2f}")
-        col2.metric("VARIANZA GLOBAL (muestral)", f"{varianza:.2f}")
-        col3.metric("MÁXIMO GLOBAL", f"${maximo:.2f}")
+        col1.metric("MEDIA GLOBAL", f"${media:.2f}")
+        col2.metric("VARIANZA (muestral)", f"{varianza:.2f}")
+        col3.metric("MÁXIMO", f"${maximo:.2f}")
 
-        # --- GRÁFICA DE BARRAS GLOBAL ---
-        st.subheader("Gráfica Global de Pagos Históricos (todos los recibos)")
+        st.subheader("📊 Gráfica Global de Pagos Históricos")
         fig, ax = plt.subplots(figsize=(12, 6))
-        # Mostramos los pagos en el orden que fueron agregados (podríamos ordenarlos si se desea)
         indices = range(len(todos_los_pagos))
-        barras = ax.bar(indices, todos_los_pagos, color='skyblue', edgecolor='navy')
-        ax.axhline(media, color='red', linestyle='--', label=f'Media Global: ${media:.2f}')
+        barras = ax.bar(indices, todos_los_pagos, color='#3498db', edgecolor='#2c3e50')
+        ax.axhline(media, color='#e74c3c', linestyle='--', linewidth=2, label=f'Media: ${media:.2f}')
         ax.set_ylabel("Monto Pagado ($)")
         ax.set_xlabel("Periodos (orden de extracción)")
-        ax.set_title("Evolución de Pagos CFE - Consolidado")
+        ax.set_title("Evolución de Pagos CFE - Consolidado", fontsize=14)
         ax.legend()
-        # Añadir etiquetas solo si no hay demasiados datos
         if len(todos_los_pagos) <= 30:
             for bar in barras:
                 yval = bar.get_height()
@@ -153,8 +207,7 @@ if archivos_subidos:
                         ha='center', va='bottom', fontsize=8, fontweight='bold')
         st.pyplot(fig)
 
-        # --- DETALLE POR ARCHIVO ---
-        with st.expander("Ver detalles por cada recibo"):
+        with st.expander("📋 Ver detalles por cada recibo"):
             for item in resumen_por_archivo:
                 st.markdown(f"**{item['nombre']}** - {item['cantidad']} pagos detectados")
                 if item['pagos']:
@@ -162,4 +215,4 @@ if archivos_subidos:
                 else:
                     st.warning("No se encontraron datos en este recibo.")
     else:
-        st.error("No se encontraron datos en ningún recibo. Asegúrate de que los PDF contengan la tabla de 'Consumo Histórico'.")
+        st.error("❌ No se encontraron datos en ningún recibo. Asegúrate de que los PDF contengan la tabla de 'Consumo Histórico'.")
