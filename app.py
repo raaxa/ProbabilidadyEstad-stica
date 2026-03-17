@@ -16,7 +16,7 @@ st.set_page_config(page_title="Analizador CFE Estadístico", page_icon="⚡", la
 # Si no tienes imagen, puedes poner un emoji grande o simplemente omitir esta línea.
 # Si quieres usar una imagen desde internet, usa la URL.
 try:
-    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/CFE_logo.svg/1200px-CFE_logo.svg.png", width=150)
+    st.image("https://static.vecteezy.com/system/resources/thumbnails/054/955/152/small/a-retro-styled-computer-with-a-colorful-geometric-screen-and-a-classic-keyboard-design-png.png", width=150)
 except:
     pass  # Si no carga la imagen, no interrumpe la app
 
