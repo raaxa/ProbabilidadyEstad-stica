@@ -15,8 +15,14 @@ st.set_page_config(page_title="Analizador CFE Estadístico", page_icon="⚡", la
 # 1. Imagen de logo (si tienes un archivo local, descomenta la línea y ajusta el nombre)
 # Si no tienes imagen, puedes poner un emoji grande o simplemente omitir esta línea.
 # Si quieres usar una imagen desde internet, usa la URL.
+
+st.markdown(
+    "<h1 style='text-align: center; color: #B0C4DE; font-family: Arial, comic-sans;'>Trabajos y Proyectos de Probabilidad y Estadística</h1>",
+    unsafe_allow_html=True
+)
+
 try:
-    st.image("https://static.vecteezy.com/system/resources/thumbnails/054/955/152/small/a-retro-styled-computer-with-a-colorful-geometric-screen-and-a-classic-keyboard-design-png.png", width=500)
+    st.image("https://static.vecteezy.com/system/resources/thumbnails/054/955/152/small/a-retro-styled-computer-with-a-colorful-geometric-screen-and-a-classic-keyboard-design-png.png", width=700)
 except:
     pass  # Si no carga la imagen, no interrumpe la app
 
@@ -30,12 +36,12 @@ st.markdown(
     }
     /* Títulos principales en azul oscuro */
     h1 {
-        color: #003366;
+        color: #FFFAFA;
         text-align: center;
         font-family: 'Arial', sans-serif;
     }
     h2, h3 {
-        color: #003366;
+        color: #FFFAFA;
     }
     /* Mejorar aspecto de los botones */
     .stButton > button {
@@ -72,7 +78,7 @@ st.markdown(
 
 # 3. Título decorado (reemplaza el st.title original)
 st.markdown("<h1>⚡ Analizador de Historial CFE ⚡</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; font-size: 1.2rem; color: #2c3e50;'>Sube varios recibos y obtén estadísticas globales de tus pagos</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; font-size: 1.2rem; color: #FFFAFA;'>Sube varios recibos y obtén estadísticas globales de tus pagos</p>", unsafe_allow_html=True)
 
 # ============================================
 #  FIN DE MEJORAS ESTÉTICAS
